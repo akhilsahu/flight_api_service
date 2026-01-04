@@ -1,8 +1,4 @@
-ngrok http --url=star-moderately-penguin.ngrok-free.app 5000
-
-
-ngrok http 127.0.0.1:5000 --url=star-moderately-penguin.ngrok-free.app
-
+ 
 **Note:** The application is configured to handle CORS (Cross-Origin Resource Sharing) headers, so it is not necessary to add them via ngrok.
 
 Here is the full **README.md** file using standard GitHub Markdown. This includes technical badges, code blocks, and a clear explanation of your parallel "Clubbed" architecture.
