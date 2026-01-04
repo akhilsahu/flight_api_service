@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Flight Scraper Stream Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f4f4f9; }
+        #log-container { 
+            background: #1e1e1e; color: #75beff; padding: 15px; 
+            border-radius: 8px; height: 300px; overflow-y: auto; 
+            font-family: monospace; margin-top: 20px; border: 2px solid #333;
+        }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; }
+        input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        button { 
+            padding: 8px 16px; cursor: pointer; background: #007bff; 
+            color: white; border: none; border-radius: 4px; 
+        }
+        button:disabled { background: #ccc; }
+        .status-msg { color: #555; font-size: 0.9em; }
+        .flight-card { background: white; padding: 10px; margin: 5px 0; color: #333; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <h2>✈️ Flight Scraper Live Test</h2>
+    
+    <div class="controls">
+        <input type="text" id="from" placeholder="From (DEL)" value="DEL">
+        <input type="text" id="to" placeholder="To (BOM)" value="BOM">
+        <input type="date" id="date" value="2026-01-02">
+        <button id="startBtn">Start Search</button>
+    </div>
+
+    <div class="status-msg" id="connectionStatus">Status: Idle</div>
+    <div id="log-container"></div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const logContainer = document.getElementById('log-container');
+        const statusMsg = document.getElementById('connectionStatus');
+
+        function log(message, isData = false) {
+            const div = document.createElement('div');
+            if (isData) {
+                div.className = 'flight-card';
+                div.innerHTML = `<strong>Result:</strong> ${JSON.stringify(message)}`;
+            } else {
+                div.textContent = `> ${message}`;
+            }
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        startBtn.addEventListener('click', async () => {
+            const from = document.getElementById('from').value;
+            const to = document.getElementById('to').value;
+            const date = document.getElementById('date').value;
+
+            // 1. Reset UI
+            logContainer.innerHTML = '';
+            startBtn.disabled = true;
+            statusMsg.textContent = "Status: Initializing Task...";
+            log(`Requesting search for ${from} to ${to} on ${date}...`);
+
+            try {
+                // 2. Trigger the Celery Task via Flask
+                const response = await fetch(`http://127.0.0.1:5001/api/flight/start?from=${from}&to=${to}&travel_date=${date}`);
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+
+                const taskId = data.task_id;
+                const streamUrl = `http://127.0.0.1:5001/api/flight/stream/${taskId}`;
+                log(`Task ID created: ${taskId}`);
+                statusMsg.textContent = "Status: Connecting to Redis Stream...";
+                    
+                // 3. Connect to the EventSource (SSE)
+                const source = new EventSource(streamUrl);
+
+                source.onmessage = (event) => {
+                    const payload = JSON.parse(event.data);
+                    console.log(payload);
+
+                    log(`[${payload.progress || 0}%] ${payload.status}`);
+
+                    // 4. Handle Closure
+                    if (payload.done === true || payload.event === "CLOSE_STREAM") {
+                        log("🏁 Backend signaled completion.");
+                        source.close(); // KILL THE CONNECTION
+                        statusMsg.textContent = "Status: Finished & Disconnected.";
+                        startBtn.disabled = false;
+
+                        if (payload.results) {
+                            log(payload.results, true);
+                        }
+                    }
+                };
+
+                source.onerror = (err) => {
+                    log("❌ Stream error/reset. Connection likely closed by browser.");
+                    source.close();
+                    startBtn.disabled = false;
+                };
+
+            } catch (err) {
+                log(`❌ Error: ${err.message}`);
+                startBtn.disabled = false;
+                statusMsg.textContent = "Status: Error.";
+            }
+        });
+    </script>
+</body>
+</html>

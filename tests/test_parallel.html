@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Collection Tester</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f4f7f6; padding: 40px; }
+        .container { max-width: 900px; margin: auto; }
+        .search-box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); display: flex; gap: 10px; margin-bottom: 20px; }
+        input, button { padding: 12px; border: 1px solid #ddd; border-radius: 8px; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; font-weight: 600; transition: 0.3s; }
+        button:hover { background: #0056b3; }
+        
+        /* Flight Card Styling */
+        .flight-card { background: white; margin-bottom: 15px; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 5px solid #007bff; }
+        .flight-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .flight-no { font-weight: bold; font-size: 1.2em; color: #333; }
+        
+        .sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .source-deal { background: #f8f9fa; padding: 10px; border-radius: 8px; border: 1px solid #eee; }
+        .source-name { font-size: 0.8em; text-transform: uppercase; color: #666; font-weight: bold; }
+        .price { color: #28a745; font-size: 1.1em; font-weight: bold; display: block; margin-top: 5px; }
+        
+        .status-bar { font-size: 0.9em; color: #555; margin-bottom: 10px; font-style: italic; }
+        #log { background: #222; color: #0f0; padding: 15px; border-radius: 8px; font-family: monospace; height: 120px; overflow-y: auto; margin-top: 20px; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>✈️ Global Flight Collection</h2>
+    
+    <div class="search-box">
+        <input type="text" id="from" placeholder="From (DEL)" value="DEL" style="width: 80px;">
+        <input type="text" id="to" placeholder="To (BOM)" value="BOM" style="width: 80px;">
+        <input type="date" id="date" value="2026-01-02">
+        <button id="searchBtn">Find Best Deals</button>
+    </div>
+
+    <div id="status" class="status-bar">Ready to search...</div>
+    <div id="results-container"></div>
+    <div id="log"></div>
+</div>
+
+<script>
+    const searchBtn = document.getElementById('searchBtn');
+    const resultsContainer = document.getElementById('results-container');
+    const logDiv = document.getElementById('log');
+    const statusDiv = document.getElementById('status');
+
+    function addLog(msg) {
+        const p = document.createElement('div');
+        p.textContent = `> ${new Date().toLocaleTimeString()}: ${msg}`;
+        logDiv.prepend(p);
+    }
+
+    function renderCollection(collection) {
+    resultsContainer.innerHTML = '';
+    
+    Object.keys(collection).forEach(flightNo => {
+        const card = document.createElement('div');
+        card.className = 'flight-card';
+        
+        const sourcesData = collection[flightNo]; // { "mmt": [...], "ixigo": [...] }
+        let sourceHtml = '';
+
+        Object.keys(sourcesData).forEach(sourceName => {
+            const flights = sourcesData[sourceName];
+            flights.forEach(f => {
+                // Safely handle both "Price" and "price"
+                const displayPrice = f.Price || f.price || 'N/A';
+                const airline = f.Airline || f.airline || 'Unknown';
+                const time = f.Departure_Time || f.time || '';
+
+                sourceHtml += `
+                    <div class="source-deal">
+                        <span class="source-name">${sourceName}</span>
+                        <span class="price">${displayPrice}</span>
+                        <div style="font-size:11px; color:#666">${airline} | ${time}</div>
+                    </div>
+                `;
+            });
+        });
+
+        card.innerHTML = `
+            <div class="flight-header">
+                <span class="flight-no">✈️ Flight ${flightNo}</span>
+            </div>
+            <div class="sources-grid">${sourceHtml}</div>
+        `;
+        resultsContainer.appendChild(card);
+    });
+}
+
+    searchBtn.addEventListener('click', async () => {
+        const from = document.getElementById('from').value;
+        const to = document.getElementById('to').value;
+        const date = document.getElementById('date').value;
+
+        resultsContainer.innerHTML = '';
+        addLog(`Initiating request for ${from} to ${to}...`);
+        
+        try {
+            // 1. Start the Scrape
+            const res = await fetch(`http://127.0.0.1:5001/api/flight/start?from=${from}&to=${to}&travel_date=${date}`);
+            const { task_id } = await res.json();
+            
+            addLog(`Task created: ${task_id}. Connecting to stream...`);
+
+            // 2. Open Stream
+            const eventSource = new EventSource(`http://127.0.0.1:5001/api/flight/stream/${task_id}`);
+
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log(data);
+                if (data.status) {
+                    statusDiv.textContent = data.status;
+                    addLog(`${data.source || 'SYSTEM'}: ${data.status}`);
+                }
+
+                // If we get individual source results, we can show them, 
+                // but the "TOTAL" source is our final clubbed collection.
+                if (data.source === "TOTAL" && data.results) {
+                    addLog("Final clubbed collection received!");
+                    renderCollection(data.results);
+                }
+                
+                if (data.done && data.source === "TOTAL") {
+                    eventSource.close();
+                    addLog("Stream closed successfully.");
+                }
+            };
+
+            eventSource.onerror = () => {
+                addLog("Stream connection error.");
+                eventSource.close();
+            };
+
+        } catch (err) {
+            addLog(`Error: ${err.message}`);
+        }
+    });
+</script>
+
+</body>
+</html>
