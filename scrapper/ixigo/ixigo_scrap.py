@@ -29,12 +29,14 @@ def scrap_data(origin="LKO", destination="DEL", travel_date="25122025",uniquas=N
             sb.execute_script("jQuery, document.elementFromPoint(2, 5).click();")
             
             sb.sleep(2)
-            for i in range(0, 8000,1000):
+            try:
+
+              for i in range(0, 8000,1000):
                 sb.execute_script(f"document.querySelector('.bg-neutral-60.h-screen.overflow-y-auto').scrollTo(0, {i});")
-                #sb.save_screenshot('./ss/mmt_res.png')
                 sr = sb.get_page_source()
-                #sr = sb.get_attribute(".listingContainer div","innerHTML")
                 write_to_file(sr,filename=HTML_FILE_PATH_IXIGO.format(unqiuas=f"{uniquas}_{i}"),mode="w")
+            except Exception as e:
+                logger.error(f"End of scroll in ixigo scraping: {e}")
                 
             print("Scraping ixigo completed")
             sb.quit()

@@ -1,9 +1,14 @@
-import csv
+import csv, os
 from bs4 import BeautifulSoup
 import re
 import logging
 import sys
-from scrapper.scrap_config import HTML_FILE_PATH_MMT
+try:
+    from scrapper.scrap_config import HTML_FILE_PATH_MMT,HTML_FILE_BASE_PATH_MMT
+except ImportError:
+    HTML_FILE_BASE_PATH_MMT = "./scrapper/ss/mmt/{unqiuas}/"
+    HTML_FILE_PATH_MMT = "./scrapper/ss/mmt/{unqiuas}/mmt_res_{unqiuas}_{num}.html"
+
 #from scrap_config import HTML_FILE_PATH_MMT
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +37,18 @@ PRICE_SELECTOR = 'div[class*="priceSection"]'
 def write_html_to_file(html_content, filename="./scrapper/ss/mmt1_pretty.html"):
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(html_content)
+
+def list_files_in_directory(path):
+    files_list = []
+    # Iterate over all entries in the directory
+    for entry in os.listdir(path):
+        # Construct the full path
+        full_path = os.path.join(path, entry)
+        # Check if the entry is a file
+        if os.path.isfile(full_path):
+            files_list.append(entry)
+    return files_list
+
 
 def extract_flight_data(html_content):
     """
@@ -138,10 +155,10 @@ def save_to_csv(data, filename):
         logger.error(f"Error saving to CSV: {e}")
 
 
-def parse_flight_data(unquas_file_code):
+def parse_flight_data(html_file_path):
     """Main function to run the script."""
     try:
-        html_file_path = HTML_FILE_PATH_MMT.format(unqiuas=unquas_file_code)
+        #html_file_path = HTML_FILE_PATH_MMT.format(unqiuas=unquas_file_code)
         with open(html_file_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
     except FileNotFoundError:
@@ -156,8 +173,19 @@ def parse_flight_data(unquas_file_code):
     return flight_data
     #save_to_csv(flight_data, OUTPUT_CSV_PATH)
 
+def read_parse_flight_files(uniquas="1769864778.701042"):
+    root_path = HTML_FILE_BASE_PATH_MMT.format(unqiuas=uniquas)
+    list_files = list_files_in_directory(root_path)
+    all_flights = []
+    for file in list_files:
+        fpath = f"{root_path}{file}"
 
-# if __name__ == "__main__":
+        res = parse_flight_data(fpath)
+        if res:
+            all_flights.extend(res)
+    return all_flights
 
+if __name__ == "__main__":
+    read_parse_flight_files(uniquas="1769864778.701042")
 #     unquas_file_code
 #     parse_flight_data()

@@ -29,6 +29,8 @@ services:
   worker:
     build: .
     container_name: celery_scraper
+    env_file:
+      - .env
     # This stays the same as it correctly points to the celery object in app.py
     command: python -m celery -A app.celery worker --loglevel=info --concurrency=3
     volumes:

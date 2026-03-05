@@ -1,5 +1,10 @@
 from celery import Celery
 import os
+
+def write_to_file(data,filename="./uploads/data.json"):
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(data)
+
 def make_celery(app):
     # This pulls the 'CELERY_CONFIG' we defined above
     conf = app.config.get("CELERY_CONFIG", {})

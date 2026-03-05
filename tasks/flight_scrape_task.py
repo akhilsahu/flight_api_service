@@ -7,6 +7,8 @@ from scrapper.mmt import scrap_extract as mmt
 from scrapper.ixigo import scrap_extract as ixigo
 from celery.utils.log import get_task_logger
 from utils.config import SCRAPPER_REGISTRY
+from utils.amadeus.amadeus_api import get_amadeus_data
+from utils.file_ops import write_to_file
 
 from datetime import datetime
 r = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"))
@@ -25,6 +27,30 @@ def broadcast(task_id, msg, progress, results=None, done=False, source=None, is_
     r.publish(task_id, json.dumps(payload))
 
 
+def source_flight_mapping(all_source_data):
+
+    print(f"all_source_data: {all_source_data}=================")
+    flight_data_dict = defaultdict(lambda: defaultdict(list))
+
+    for source_list in all_source_data:
+        if not source_list:
+            continue
+        print(f"source_list.............: {source_list}=================source_list")   
+        for flight in source_list:
+            print(f"flight.............: {flight}=================flight")
+            f_no = str(flight.get('flight_no', '')).replace(" ", "").upper()
+            src = flight.get('source')
+            
+            if f_no and src:
+                # a single flight_no and source can have have a single flight object
+                flight_data_dict[f_no][src] = flight
+           
+    print(f"flight_data_dict.............: {flight_data_dict}")
+    # 2. Convert to standard dict for JSON compatibility
+    final_collection = {k: dict(v) for k, v in flight_data_dict.items()}
+    print(f"final_collection.............: {final_collection}")
+    return final_collection
+
 @celery_app.task(name='merge_results')
 def merge_results(all_source_data, from_iata, to_iata, travel_date_iso, task_id):
     """
@@ -32,30 +58,27 @@ def merge_results(all_source_data, from_iata, to_iata, travel_date_iso, task_id)
     This task 'clubs' everything into a single collection.
     """
     logger.info(f"Merging all sources for {from_iata}->{to_iata}")
-
-    # 1. Your Aim: Clubbing logic
-    # Structure: { "AI101": { "mmt": [...], "ixigo": [...] } }
-    flight_data_dict = defaultdict(lambda: defaultdict(list))
-
-    for source_list in all_source_data:
-        if not source_list:
-            continue
-            
-        for flight in source_list:
-            f_no = str(flight.get('flight_no', '')).replace(" ", "").upper()
-            src = flight.get('source')
-            
-            if f_no and src:
-                flight_data_dict[f_no][src].append(flight)
-
-    # 2. Convert to standard dict for JSON compatibility
-    final_collection = {k: dict(v) for k, v in flight_data_dict.items()}
-
-    # 3. Update the Shared Redis Cache Key
-    # This key now represents the 'Collection of All Sources'
-    cache_key = f"flights:{from_iata}:{to_iata}:{travel_date_iso}"
-    r.set(cache_key, json.dumps(final_collection))
+ 
+    # # 2. Convert to standard dict for JSON compatibility
+    # final_collection = {k: dict(v) for k, v in flight_data_dict.items()}
+    write_to_file(json.dumps(all_source_data),filename="./uploads/all_source_data.json")
+    final_collection = source_flight_mapping(all_source_data)
     
+    # 3. Update the Shared Redis Cache Key
+    cache_key = f"flights:{from_iata}:{to_iata}:{travel_date_iso}"
+    r.set(cache_key, json.dumps(final_collection)) 
+
+    #Fetch the amadeus data from the redis cache
+    amadeus_data = r.get(f"amadeus-{task_id}")
+    logger.info(f"amadeus_data.............: {amadeus_data}")
+    if type(amadeus_data) == bytes:
+        amadeus_data = amadeus_data.decode("utf-8") 
+        
+        amadeus_data = json.loads(amadeus_data)
+        write_to_file(json.dumps(amadeus_data),filename="./uploads/amadeus_data.json")
+        write_to_file(json.dumps(final_collection),filename="./uploads/final_collection.json")
+        final_collection = merge_flight_dicts(final_collection, amadeus_data)
+    r.set(task_id, json.dumps(final_collection))
     # 4. Broadcast the 'TOTAL' collection to the UI
     broadcast(
         task_id, 
@@ -63,8 +86,7 @@ def merge_results(all_source_data, from_iata, to_iata, travel_date_iso, task_id)
         progress=100, 
         results=final_collection, 
         done=True, 
-        source="TOTAL"
-    )
+        source="TOTAL" )
     
     return final_collection
 
@@ -74,8 +96,8 @@ def execute_single_source_scrape(self, source_name, from_iata, to_iata, travel_d
         return
     
     scr_config = SCRAPPER_REGISTRY[source_name]
-    cache_key = f"flights:{from_iata}:{to_iata}:{travel_date_iso}"
-    logger.info(f"Source Func: {scr_config['func']}" )
+    cache_key = f"flights:{from_iata}:{to_iata}:{travel_date_iso}:{source_name}"
+    logger.info(f"Source Func: {scr_config['func']}, {source_name}" )
     try:
         # 1. Convert ISO (2026-01-02) to Source Format (e.g. 02/01/2026)
         date_obj = datetime.strptime(travel_date_iso, "%Y-%m-%d")
@@ -86,14 +108,17 @@ def execute_single_source_scrape(self, source_name, from_iata, to_iata, travel_d
         results = scr_config["func"](from_iata, to_iata, formatted_date)
 
         # 3. Permanent Cache Update (No TTL)
-        r.set(cache_key, json.dumps(results))
-    
+        cache_key = f"{source_name}-{task_id}"
+        logger.info(f"setting cache_key.............: {cache_key}, results: {results}")
+        r.set(f"{source_name}-{task_id}", json.dumps(results))
+        write_to_file(json.dumps(results),filename=f"./uploads/{source_name}_results.json")
         # 4. Final Broadcast of Fresh Data
         broadcast(task_id, f"{source_name.upper()} Complete ", 80, 
                   results=results, done=False, source=source_name, is_stale=False)
 
         return results
     except Exception as e:
+        logger.error(f"{source_name} Error: {str(e)}")
         broadcast(task_id, f"{source_name} Error: {str(e)}", 0, done=True, source=source_name)
         return []
 
@@ -128,3 +153,45 @@ def execute_flight_scrape(self, from_iata, to_iata, travel_date, task_id):
         error_msg = str(e)
         broadcast(f"Error: {error_msg}", 0, done=True)
         return {"error": error_msg, "results": []}
+
+@celery_app.task(bind=True)
+def fetch_amadeus_flights(self, origin, destination, date):
+    # Safe progress update
+    print(f"self: {self} origin: {origin} destination: {destination} date: {date}")
+    #if self:
+    #    self.update_state(state='PROGRESS', meta={'status': 'Fetching...'})
+    
+    results = get_amadeus_data(origin, destination, date)
+    results = source_flight_mapping([results ])
+
+    return results
+
+@celery_app.task(name='return_data_task')
+def return_data_task(data):
+    return data
+
+def merge_flight_dicts(*dicts):
+    """
+    Merge multiple flight data dictionaries into a single dictionary.
+    eg: merge_flight_data(amadeus_data, mmt_data, ixigo_data)
+     
+       dict1 =  "flight_no": {"amadeus": { "flight_data": "..."}}
+       dict2 = "flight_no": {  "mmt": { "flight_data": "..."  } } 
+      to
+      { "flight_no": {  "amadeus": {  "flight_data": "..." },
+                    "mmt": {  "flight_data": "..." }  }  }
+    """
+    result = {}
+    print(f"dicts.............: {dicts}=================")
+    for d in dicts:
+      print(f"dicts.............: {d}=================d")
+
+      if d:   
+        for flight_no, details in d.items():
+            if flight_no not in result:
+                # If flight isn't in result yet, add it
+                result[flight_no] = details.copy()
+            else:
+                # If flight exists, merge the inner source (amadeus, mmt, etc.)
+                result[flight_no].update(details)
+    return result
